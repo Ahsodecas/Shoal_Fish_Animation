@@ -50,7 +50,76 @@ BoidsVelocity boidsVelocity;
 
 __global__ void updateBoids(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt)
 {
-    return;
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx >= numBoids) return;
+    float close_dx = 0, close_dy = 0;
+    float xvel_avg = 0, yvel_avg = 0, xpos_avg = 0, ypos_avg = 0;
+    int neighbors = 0;
+
+    float my_x = positions[idx];
+    float my_y = positions[idx + 1];
+    float my_vx = boidsVelocity.vx[idx];
+    float my_vy = boidsVelocity.vy[idx];
+
+    // Loop through all boids
+    for (int i = 0; i < numBoids; i += 2) {
+        if (i == idx) continue;
+        float dx = positions[i] - my_x;
+        float dy = positions[i + 1] - my_y;
+        float dist = sqrt(dx * dx + dy * dy);
+
+        if (dist < PROTECTED_RANGE) { // Separation
+            close_dx -= dx;
+            close_dy -= dy;
+        }
+        if (dist < VISUAL_RANGE) { // Alignment and Cohesion
+            xvel_avg += boidsVelocity.vx[i];
+            yvel_avg += boidsVelocity.vy[i];
+            xpos_avg += positions[i];
+            ypos_avg += positions[i + 1];
+            neighbors++;
+        }
+    }
+
+    // Calculate alignment and cohesion
+    if (neighbors > 0) {
+        xvel_avg /= neighbors;
+        yvel_avg /= neighbors;
+        xpos_avg /= neighbors;
+        ypos_avg /= neighbors;
+
+        my_vx += (xvel_avg - my_vx) * MATCHING_FACTOR;   // Alignment
+        my_vy += (yvel_avg - my_vy) * MATCHING_FACTOR;
+
+        my_vx += (xpos_avg - my_x) * CENTERING_FACTOR;   // Cohesion
+        my_vy += (ypos_avg - my_y) * CENTERING_FACTOR;
+    }
+
+    my_vx += close_dx * AVOID_FACTOR;  // Separation
+    my_vy += close_dy * AVOID_FACTOR;
+
+    // Edge Avoidance
+    if (my_x < EDGE_MARGIN) my_vx += TURN_FACTOR;
+    if (my_x > 800 - EDGE_MARGIN) my_vx -= TURN_FACTOR;
+    if (my_y < EDGE_MARGIN) my_vy += TURN_FACTOR;
+    if (my_y > 600 - EDGE_MARGIN) my_vy -= TURN_FACTOR;
+
+    // Speed Limits
+    float speed = sqrt(my_vx * my_vx + my_vy * my_vy);
+    if (speed < MIN_SPEED) {
+        my_vx = (my_vx / speed) * MIN_SPEED;
+        my_vy = (my_vy / speed) * MIN_SPEED;
+    }
+    if (speed > MAX_SPEED) {
+        my_vx = (my_vx / speed) * MAX_SPEED;
+        my_vy = (my_vy / speed) * MAX_SPEED;
+    }
+
+    // Update position
+    positions[idx] += my_vx * dt;
+    positions[idx + 1] += my_vy * dt;
+    boidsVelocity.vx[idx] = my_vx;
+    boidsVelocity.vy[idx] = my_vy;
 }
 
 void checkShaderCompilation(GLuint shader, std::string type) {
@@ -230,16 +299,31 @@ int main()
     free(temp_vy);
     free(temp_positions);
 
+    glPointSize(3.0f);
     while (!glfwWindowShouldClose(window))
     {
 
         cudaGraphicsMapResources(1, &cudaVBO, 0);
-        cudaGraphicsResourceGetMappedPointer((void**)&temp_positions, NULL, cudaVBO);
+        cudaStatus = cudaGraphicsResourceGetMappedPointer((void**)&temp_positions, NULL, cudaVBO);
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
+            return -1;
+        }
 
         // Update boids
         updateBoids << <(NUM_BOIDS + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE >> > (temp_positions, boidsVelocity, NUM_BOIDS, DT);
 
-        cudaGraphicsUnmapResources(1, &cudaVBO, 0);
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(err) << std::endl;
+        }
+        cudaDeviceSynchronize();
+
+        cudaStatus = cudaGraphicsUnmapResources(1, &cudaVBO, 0);
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
+            return -1;
+        }
 
         // Render
         glClear(GL_COLOR_BUFFER_BIT);
