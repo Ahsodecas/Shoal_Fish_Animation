@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <iostream>
 
-#define NUM_BOIDS 10000
+#define NUM_BOIDS 5000 
 #define BLOCK_SIZE 256
 #define VISUAL_RANGE 50.0f
 #define PROTECTED_RANGE 10.0f
@@ -20,7 +20,9 @@
 #define MAX_SPEED 10.0f
 #define DT 0.1f
 #define TURN_FACTOR 1.0f
-#define EDGE_MARGIN 100.0f
+#define EDGE_MARGIN 50.0f
+#define SCREEN_HEIGHT 600
+#define SCREEN_WIDTH 800
 
 
 struct BoidsVelocity
@@ -47,6 +49,16 @@ void main() {
 
 
 BoidsVelocity boidsVelocity;
+void toNormalised(float* x, float* y, float* norm_x, float* norm_y)
+{
+    *norm_x = (*x * 2) / SCREEN_WIDTH - 1.0f;
+    *norm_y = 1.0f - (*y * 2) / SCREEN_HEIGHT;
+}
+void fromNormalised(float* x, float* y, float* norm_x, float* norm_y)
+{
+    *x = ((*norm_x + 1.0f) / 2.0f) * SCREEN_WIDTH;
+    *y = (1.0f - ((*norm_y + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+}
 
 __global__ void updateBoids(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt)
 {
@@ -56,16 +68,21 @@ __global__ void updateBoids(float* positions, BoidsVelocity boidsVelocity, int n
     float xvel_avg = 0, yvel_avg = 0, xpos_avg = 0, ypos_avg = 0;
     int neighbors = 0;
 
-    float my_x = positions[idx];
-    float my_y = positions[idx + 1];
+    float my_x = positions[2 * idx];
+    float my_y = positions[2 * idx + 1];
     float my_vx = boidsVelocity.vx[idx];
     float my_vy = boidsVelocity.vy[idx];
+    //fromNormalised(&my_x, &my_y, &positions[2 * idx], &positions[2 * idx + 1]);
+    my_x = ((positions[2 * idx] + 1.0f) / 2.0f) * SCREEN_WIDTH;
+    my_y = (1.0f - ((positions[2 * idx + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
 
     // Loop through all boids
-    for (int i = 0; i < numBoids; i += 2) {
+    for (int i = 0; i < numBoids; i++) {
         if (i == idx) continue;
-        float dx = positions[i] - my_x;
-        float dy = positions[i + 1] - my_y;
+        float x = ((positions[2 * i] + 1.0f) / 2.0f) * SCREEN_WIDTH;
+        float y = (1.0f - ((positions[2 * i + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+        float dx = x - my_x;
+        float dy = y - my_y;
         float dist = sqrt(dx * dx + dy * dy);
 
         if (dist < PROTECTED_RANGE) { // Separation
@@ -75,8 +92,8 @@ __global__ void updateBoids(float* positions, BoidsVelocity boidsVelocity, int n
         if (dist < VISUAL_RANGE) { // Alignment and Cohesion
             xvel_avg += boidsVelocity.vx[i];
             yvel_avg += boidsVelocity.vy[i];
-            xpos_avg += positions[i];
-            ypos_avg += positions[i + 1];
+            xpos_avg += x;
+            ypos_avg += y;
             neighbors++;
         }
     }
@@ -116,10 +133,13 @@ __global__ void updateBoids(float* positions, BoidsVelocity boidsVelocity, int n
     }
 
     // Update position
-    positions[idx] += my_vx * dt;
-    positions[idx + 1] += my_vy * dt;
+    my_x += my_vx * dt;
+    my_y += my_vy * dt;
     boidsVelocity.vx[idx] = my_vx;
     boidsVelocity.vy[idx] = my_vy;
+    //fromNormalised(&my_x, &my_y, &positions[2 * idx], &positions[2 * idx + 1]);
+    positions[2 * idx] = (my_x * 2) / SCREEN_WIDTH - 1.0f;
+    positions[2 * idx + 1] = 1.0f - (my_y * 2) / SCREEN_HEIGHT;
 }
 
 void checkShaderCompilation(GLuint shader, std::string type) {
@@ -359,23 +379,6 @@ int main()
     return 0;
 }
 
-
-    /*cudaStatus = cudaMemcpy(dev_b, b, size * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }*/
-
-    // Launch a kernel on the GPU with one thread for each element.
-    //addKernel<<<1, size>>>(dev_c, dev_a, dev_b);
-
-    // Check for any errors launching the kernel
-    /*cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-        goto Error;
-    }*/
-   
 
 
 
