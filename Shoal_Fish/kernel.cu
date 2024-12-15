@@ -30,11 +30,12 @@ struct BoidsVelocity
 
 const char* vertexShaderSource = R"(
 #version 330 core
-layout (location = 0) in vec2 aPos;
-void main() {
-    gl_Position = vec4(aPos / vec2(400.0, 300.0) - 1.0, 0.0, 1.0);
-}
-)";
+in vec2 position;
+
+void main()
+{
+    gl_Position = vec4(position, 0.0, 1.0);
+})";
 
 const char* fragmentShaderSource = R"(
 #version 330 core
@@ -44,7 +45,10 @@ void main() {
 }
 )";
 
-__global__ void updateBoids(float2* positions, BoidsVelocity boidsVelocity, int numBoids, float dt)
+
+BoidsVelocity boidsVelocity;
+
+__global__ void updateBoids(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt)
 {
     return;
 }
@@ -68,9 +72,26 @@ void checkShaderCompilation(GLuint shader, std::string type) {
     }
 }
 
+void initBoids()
+{
+
+}
+
 int main()
 {
     cudaError_t cudaStatus;
+
+    //int deviceCount = 0;
+    //cudaGetDeviceCount(&deviceCount);
+    //std::cout << "CUDA Device Count: " << deviceCount << std::endl;
+    //cudaDeviceReset();
+    //cudaStatus = cudaGLSetGLDevice(0);  // Select the correct GPU
+    //if (cudaStatus != cudaSuccess) {
+    //    std::cerr << "Failed to set CUDA GL Device: " << cudaGetErrorString(cudaStatus) << std::endl;
+    //    return -1;
+    //}
+
+
     if (!glfwInit())
     {
         std::cout << "Failed to initialize the GLFW library" << std::endl;
@@ -80,7 +101,7 @@ int main()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(800, 600, "LearnOpenGL", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(800, 600, "Shoal of Fish", NULL, NULL);
     if (window == NULL)
     {
         std::cout << "Failed to create GLFW window" << std::endl;
@@ -121,38 +142,93 @@ int main()
 
     GLuint VBO, VAO;
     cudaGraphicsResource* cudaVBO;
-    BoidsVelocity boidsVelocity;
+    float* temp_positions = (float*)malloc(NUM_BOIDS * 2 * sizeof(float));
 
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
     glBindVertexArray(VAO);
 
+
+    for (int i = 0; i < NUM_BOIDS * 2; i += 2) {
+        //std::cout << cudaVBO << " ";
+
+        temp_positions[i] = ((rand() % 800) / 400.0f) - 1.0f; // Normalize X to [-1, 1]
+        temp_positions[i + 1] = ((rand() % 600) / 300.0f) - 1.0f; // Normalize Y to [-1, 1]
+        /*((float*)cudaVBO)[i] = rand() % 800;
+        ((float*)cudaVBO)[i + 1] = rand() % 600;*/
+        //std::cout << &cudaVBO << " ";
+    }
     
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, NUM_BOIDS * sizeof(float2), NULL, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, NUM_BOIDS * 2 * sizeof(float), temp_positions, GL_DYNAMIC_DRAW);
 
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
     glEnableVertexAttribArray(0);
 
-    cudaGraphicsGLRegisterBuffer(&cudaVBO, VBO, cudaGraphicsMapFlagsWriteDiscard);
-
-    cudaMalloc(&boidsVelocity.vx, NUM_BOIDS * sizeof(float));
-    cudaMalloc(&boidsVelocity.vy, NUM_BOIDS * sizeof(float));
-
-    float2* temp_positions;
-    cudaGraphicsMapResources(1, &cudaVBO, 0);
-    cudaGraphicsResourceGetMappedPointer((void**)&temp_positions, NULL, cudaVBO);
-    cudaStatus = cudaGetLastError();
+    cudaStatus = cudaGraphicsGLRegisterBuffer(&cudaVBO, VBO, cudaGraphicsRegisterFlagsNone);
     if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaGraphicsResourceGetMappedPointer failed: %s\n", cudaGetErrorString(cudaStatus));
+        std::cerr << "Error registering buffer with CUDA: " << cudaGetErrorString(cudaStatus) << std::endl;
+        return -1;
     }
-    for (int i = 0; i < NUM_BOIDS; i++) {
-        temp_positions[i] = make_float2(rand() % 800, rand() % 600);
-        boidsVelocity.vx[i] = ((rand() % 20) - 10) / 10.0f;
-        boidsVelocity.vy[i] = ((rand() % 20) - 10) / 10.0f;
-    }
-    cudaGraphicsUnmapResources(1, &cudaVBO, 0);
 
+    cudaStatus = cudaMalloc(&boidsVelocity.vx, NUM_BOIDS * sizeof(float));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!");
+        return -1;
+    }
+    cudaStatus = cudaMalloc(&boidsVelocity.vy, NUM_BOIDS * sizeof(float));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!");
+        return -1;
+    }
+
+    float* temp_vx = (float*)malloc(NUM_BOIDS * sizeof(float));
+    float* temp_vy = (float*)malloc(NUM_BOIDS * sizeof(float));
+
+    //cudaStatus = cudaGraphicsMapResources(1, &cudaVBO, 0);
+    //if (cudaStatus != cudaSuccess) {
+    //    std::cerr << "Error mapping CUDA resource!" << std::endl;
+    //    return -1;  
+    //}
+    //size_t size;
+    //cudaStatus = cudaGraphicsResourceGetMappedPointer((void**)&temp_positions, &size, cudaVBO);
+    //if (cudaStatus != cudaSuccess) {
+    //    std::cerr << "Error getting mapped pointer!" << std::endl;
+    //    return -1;  
+    //}
+    //for (int i = 0; i < NUM_BOIDS * 2; i += 2) {
+    //    //std::cout << cudaVBO << " ";
+    //    
+    //    ((float*)temp_positions)[i] = rand() % 800;
+    //    ((float*)temp_positions)[i + 1] = rand() % 600;
+    //    /*((float*)cudaVBO)[i] = rand() % 800;
+    //    ((float*)cudaVBO)[i + 1] = rand() % 600;*/
+    //    //std::cout << &cudaVBO << " ";
+    //}
+    //cudaStatus = cudaGraphicsUnmapResources(1, (cudaGraphicsResource**)&temp_positions, 0);
+    //if (cudaStatus != cudaSuccess) {
+    //    fprintf(stderr, "cudaGraphicsUnmapResources failed!");
+    //    return -1;
+    //}
+    for (int i = 0; i < NUM_BOIDS; i++) {
+        temp_vx[i] = ((rand() % 20) - 10) / 10.0f;
+        temp_vy[i] = ((rand() % 20) - 10) / 10.0f;
+    }
+    
+
+    cudaStatus = cudaMemcpy(boidsVelocity.vx, temp_vx, NUM_BOIDS * sizeof(float), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMemcpy failed!");
+        return -1;
+    }
+    cudaStatus = cudaMemcpy(boidsVelocity.vy, temp_vy, NUM_BOIDS * sizeof(float), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMemcpy failed!");
+        return -1;
+    }
+    free(temp_vx);
+    free(temp_vy);
+    free(temp_positions);
 
     while (!glfwWindowShouldClose(window))
     {
