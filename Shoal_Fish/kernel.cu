@@ -1,33 +1,192 @@
-﻿
+﻿#include <glad/glad.h>
+#include <GLFW/glfw3.h>
+
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
+#include <cuda_gl_interop.h>
+
 
 #include <stdio.h>
+#include <iostream>
 
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size);
+#define NUM_BOIDS 10000
+#define BLOCK_SIZE 256
+#define VISUAL_RANGE 50.0f
+#define PROTECTED_RANGE 10.0f
+#define AVOID_FACTOR 0.05f
+#define MATCHING_FACTOR 0.05f
+#define CENTERING_FACTOR 0.01f
+#define MIN_SPEED 2.0f
+#define MAX_SPEED 10.0f
+#define DT 0.1f
+#define TURN_FACTOR 1.0f
+#define EDGE_MARGIN 100.0f
 
-__global__ void addKernel(int *c, const int *a, const int *b)
+
+struct BoidsVelocity
 {
-    int i = threadIdx.x;
-    c[i] = a[i] + b[i];
+    float* vx, * vy;
+};
+
+const char* vertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec2 aPos;
+void main() {
+    gl_Position = vec4(aPos / vec2(400.0, 300.0) - 1.0, 0.0, 1.0);
+}
+)";
+
+const char* fragmentShaderSource = R"(
+#version 330 core
+out vec4 FragColor;
+void main() {
+    FragColor = vec4(0.1, 0.6, 0.9, 1.0); // Light blue
+}
+)";
+
+__global__ void updateBoids(float2* positions, BoidsVelocity boidsVelocity, int numBoids, float dt)
+{
+    return;
+}
+
+void checkShaderCompilation(GLuint shader, std::string type) {
+    GLint success;
+    char infoLog[512];
+    if (type == "PROGRAM") {
+        glGetProgramiv(shader, GL_LINK_STATUS, &success);
+        if (!success) {
+            glGetProgramInfoLog(shader, 512, NULL, infoLog);
+            std::cerr << "ERROR::PROGRAM_LINKING_ERROR: " << infoLog << std::endl;
+        }
+    }
+    else {
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+        if (!success) {
+            glGetShaderInfoLog(shader, 512, NULL, infoLog);
+            std::cerr << "ERROR::SHADER_COMPILATION_ERROR (" << type << "): " << infoLog << std::endl;
+        }
+    }
 }
 
 int main()
 {
-    const int arraySize = 5;
-    const int a[arraySize] = { 1, 2, 3, 4, 5 };
-    const int b[arraySize] = { 10, 20, 30, 40, 50 };
-    int c[arraySize] = { 0 };
+    cudaError_t cudaStatus;
+    if (!glfwInit())
+    {
+        std::cout << "Failed to initialize the GLFW library" << std::endl;
+        return -1;
+    }
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    // Add vectors in parallel.
-    cudaError_t cudaStatus = addWithCuda(c, a, b, arraySize);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "addWithCuda failed!");
-        return 1;
+    GLFWwindow* window = glfwCreateWindow(800, 600, "LearnOpenGL", NULL, NULL);
+    if (window == NULL)
+    {
+        std::cout << "Failed to create GLFW window" << std::endl;
+        glfwTerminate();
+        return -1;
+    }
+    glfwMakeContextCurrent(window);
+
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+    {
+        std::cout << "Failed to initialize GLAD" << std::endl;
+        return -1;
     }
 
-    printf("{1,2,3,4,5} + {10,20,30,40,50} = {%d,%d,%d,%d,%d}\n",
-        c[0], c[1], c[2], c[3], c[4]);
+    glViewport(0, 0, 800, 600);
+
+
+    // Shader Compilation
+    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vertexShader, 1, &vertexShaderSource, NULL);
+    glCompileShader(vertexShader);
+    checkShaderCompilation(vertexShader, "VERTEX");
+
+    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
+    glCompileShader(fragmentShader);
+    checkShaderCompilation(fragmentShader, "FRAGMENT");
+
+    GLuint shaderProgram = glCreateProgram();
+    glAttachShader(shaderProgram, vertexShader);
+    glAttachShader(shaderProgram, fragmentShader);
+    glLinkProgram(shaderProgram);
+    checkShaderCompilation(shaderProgram, "PROGRAM");
+
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+
+
+    GLuint VBO, VAO;
+    cudaGraphicsResource* cudaVBO;
+    BoidsVelocity boidsVelocity;
+
+    glGenVertexArrays(1, &VAO);
+    glGenBuffers(1, &VBO);
+    glBindVertexArray(VAO);
+
+    
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, NUM_BOIDS * sizeof(float2), NULL, GL_DYNAMIC_DRAW);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(0);
+
+    cudaGraphicsGLRegisterBuffer(&cudaVBO, VBO, cudaGraphicsMapFlagsWriteDiscard);
+
+    cudaMalloc(&boidsVelocity.vx, NUM_BOIDS * sizeof(float));
+    cudaMalloc(&boidsVelocity.vy, NUM_BOIDS * sizeof(float));
+
+    float2* temp_positions;
+    cudaGraphicsMapResources(1, &cudaVBO, 0);
+    cudaGraphicsResourceGetMappedPointer((void**)&temp_positions, NULL, cudaVBO);
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaGraphicsResourceGetMappedPointer failed: %s\n", cudaGetErrorString(cudaStatus));
+    }
+    for (int i = 0; i < NUM_BOIDS; i++) {
+        temp_positions[i] = make_float2(rand() % 800, rand() % 600);
+        boidsVelocity.vx[i] = ((rand() % 20) - 10) / 10.0f;
+        boidsVelocity.vy[i] = ((rand() % 20) - 10) / 10.0f;
+    }
+    cudaGraphicsUnmapResources(1, &cudaVBO, 0);
+
+
+    while (!glfwWindowShouldClose(window))
+    {
+
+        cudaGraphicsMapResources(1, &cudaVBO, 0);
+        cudaGraphicsResourceGetMappedPointer((void**)&temp_positions, NULL, cudaVBO);
+
+        // Update boids
+        updateBoids << <(NUM_BOIDS + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE >> > (temp_positions, boidsVelocity, NUM_BOIDS, DT);
+
+        cudaGraphicsUnmapResources(1, &cudaVBO, 0);
+
+        // Render
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glUseProgram(shaderProgram);
+        glBindVertexArray(VAO);
+        glDrawArrays(GL_POINTS, 0, NUM_BOIDS);
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+
+    }
+
+
+
+    cudaGraphicsUnregisterResource(cudaVBO);
+    glDeleteBuffers(1, &VBO);
+    glDeleteVertexArrays(1, &VAO);
+    cudaFree(boidsVelocity.vx);
+    cudaFree(boidsVelocity.vy);
+    glDeleteProgram(shaderProgram);
+    glfwTerminate();
+    
 
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
@@ -40,82 +199,23 @@ int main()
     return 0;
 }
 
-// Helper function for using CUDA to add vectors in parallel.
-cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int size)
-{
-    int *dev_a = 0;
-    int *dev_b = 0;
-    int *dev_c = 0;
-    cudaError_t cudaStatus;
 
-    // Choose which GPU to run on, change this on a multi-GPU system.
-    cudaStatus = cudaSetDevice(0);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
-        goto Error;
-    }
-
-    // Allocate GPU buffers for three vectors (two input, one output)    .
-    cudaStatus = cudaMalloc((void**)&dev_c, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_a, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMalloc((void**)&dev_b, size * sizeof(int));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_a, a, size * sizeof(int), cudaMemcpyHostToDevice);
+    /*cudaStatus = cudaMemcpy(dev_b, b, size * sizeof(int), cudaMemcpyHostToDevice);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
-    }
-
-    cudaStatus = cudaMemcpy(dev_b, b, size * sizeof(int), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
+    }*/
 
     // Launch a kernel on the GPU with one thread for each element.
-    addKernel<<<1, size>>>(dev_c, dev_a, dev_b);
+    //addKernel<<<1, size>>>(dev_c, dev_a, dev_b);
 
     // Check for any errors launching the kernel
-    cudaStatus = cudaGetLastError();
+    /*cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
         goto Error;
-    }
-    
-    // cudaDeviceSynchronize waits for the kernel to finish, and returns
-    // any errors encountered during the launch.
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
-        goto Error;
-    }
+    }*/
+   
 
-    // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(c, dev_c, size * sizeof(int), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
 
-Error:
-    cudaFree(dev_c);
-    cudaFree(dev_a);
-    cudaFree(dev_b);
-    
-    return cudaStatus;
-}
+
