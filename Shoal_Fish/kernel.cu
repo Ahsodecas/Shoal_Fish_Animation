@@ -13,7 +13,7 @@
 #define BLOCK_SIZE 256
 #define VISUAL_RANGE 50.0f
 #define PROTECTED_RANGE 10.0f
-#define AVOID_FACTOR 0.05f
+#define AVOID_FACTOR 0.1f
 #define MATCHING_FACTOR 0.05f
 #define CENTERING_FACTOR 0.01f
 #define MIN_SPEED 2.0f
@@ -22,7 +22,7 @@
 #define TURN_FACTOR 1.0f
 #define EDGE_MARGIN 50.0f
 #define SCREEN_HEIGHT 1024
-#define SCREEN_WIDTH 1840
+#define SCREEN_WIDTH 1500
 
 
 struct BoidsVelocity
@@ -320,13 +320,14 @@ __global__ void calculateTriangleVertices(float* positions, BoidsVelocity boidsV
     float y1 = h_y + ((h_x - my_x) / s);
     float y2 = h_y + ((my_x - h_x) / s);
 
+
     positions[index] = positions[index];
-    positions[index + 2] = ((x1 + 1.0f) / 2.0f) * SCREEN_WIDTH;
-    positions[index + 4] = ((x2 + 1.0f) / 2.0f) * SCREEN_WIDTH;
-    
+    positions[index + 2] = (x1 * 2) / SCREEN_WIDTH - 1.0f;
+    positions[index + 4] = (x2 * 2) / SCREEN_WIDTH - 1.0f;
+
     positions[index + 1] = positions[index + 1];
-    positions[index + 3] = (1.0f - ((y1 + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
-    positions[index + 5] = (1.0f - ((y2 + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+    positions[index + 3] = 1.0f - (y1 * 2) / SCREEN_HEIGHT;
+    positions[index + 5] = 1.0f - (y2 * 2) / SCREEN_HEIGHT;
 }
 
 int main()
