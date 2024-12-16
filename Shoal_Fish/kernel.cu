@@ -176,14 +176,89 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
     glViewport(0, 0, width, height);
 }
 
-void initBoids()
+cudaError_t initBoids(GLuint* VBO, GLuint* VAO, cudaGraphicsResource** cudaVBO, BoidsVelocity* boidsVelocity)
 {
+    cudaError_t cudaStatus;
+    float* temp_positions = (float*)malloc(NUM_BOIDS * 2 * sizeof(float));
+    if (temp_positions == NULL)
+    {
+        fprintf(stderr, "malloc failed!");
+        return cudaErrorMemoryAllocation;
+    }
+
+    glGenVertexArrays(1, VAO);
+    glGenBuffers(1, VBO);
+    glBindVertexArray(*VAO);
+
+
+    for (int i = 0; i < NUM_BOIDS * 2; i += 2) {
+        temp_positions[i] = ((rand() % SCREEN_WIDTH) / (SCREEN_WIDTH / 2.0f)) - 1.0f; // Normalize X to [-1, 1]
+        temp_positions[i + 1] = ((rand() % SCREEN_HEIGHT) / (SCREEN_HEIGHT / 2.0f)) - 1.0f; // Normalize Y to [-1, 1]
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, *VBO);
+    glBufferData(GL_ARRAY_BUFFER, NUM_BOIDS * 2 * sizeof(float), temp_positions, GL_DYNAMIC_DRAW);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(0);
+
+    cudaStatus = cudaGraphicsGLRegisterBuffer(cudaVBO, *VBO, cudaGraphicsRegisterFlagsNone);
+    if (cudaStatus != cudaSuccess) {
+        std::cerr << "Error registering buffer with CUDA: " << cudaGetErrorString(cudaStatus) << std::endl;
+        return cudaStatus;
+    }
+
+    cudaStatus = cudaMalloc(&boidsVelocity->vx, NUM_BOIDS * sizeof(float));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!");
+        return cudaStatus;
+    }
+    cudaStatus = cudaMalloc(&boidsVelocity->vy, NUM_BOIDS * sizeof(float));
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed!");
+        return cudaStatus;
+    }
+
+    float* temp_vx = (float*)malloc(NUM_BOIDS * sizeof(float));
+    if (temp_vx == NULL)
+    {
+        fprintf(stderr, "malloc failed!");
+        return cudaErrorMemoryAllocation;
+    }
+    float* temp_vy = (float*)malloc(NUM_BOIDS * sizeof(float));
+    if (temp_vx == NULL)
+    {
+        fprintf(stderr, "malloc failed!");
+        return cudaErrorMemoryAllocation;
+    }
+
+    for (int i = 0; i < NUM_BOIDS; i++) {
+        temp_vx[i] = ((rand() % 20) - 10) / 10.0f;
+        temp_vy[i] = ((rand() % 20) - 10) / 10.0f;
+    }
+
+
+    cudaStatus = cudaMemcpy(boidsVelocity->vx, temp_vx, NUM_BOIDS * sizeof(float), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMemcpy failed!");
+        return cudaStatus;
+    }
+    cudaStatus = cudaMemcpy(boidsVelocity->vy, temp_vy, NUM_BOIDS * sizeof(float), cudaMemcpyHostToDevice);
+    if (cudaStatus != cudaSuccess) {
+        fprintf(stderr, "cudaMemcpy failed!");
+        return cudaStatus;
+    }
+
+    free(temp_vx);
+    free(temp_vy);
+    free(temp_positions);
 
 }
 
 int main()
 {
     cudaError_t cudaStatus;
+    int THREADS_NUM = (NUM_BOIDS + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     if (!glfwInit())
     {
@@ -233,78 +308,17 @@ int main()
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
 
-    BoidsVelocity boidsVelocity;
     GLuint VBO, VAO;
     cudaGraphicsResource* cudaVBO;
-    float* temp_positions = (float*)malloc(NUM_BOIDS * 2 * sizeof(float));
+    BoidsVelocity boidsVelocity;
+    float* temp_positions = NULL;
 
-    glGenVertexArrays(1, &VAO);
-    glGenBuffers(1, &VBO);
-    glBindVertexArray(VAO);
-
-
-    for (int i = 0; i < NUM_BOIDS * 2; i += 2) {
-        temp_positions[i] = ((rand() % SCREEN_WIDTH) / (SCREEN_WIDTH / 2.0f)) - 1.0f; // Normalize X to [-1, 1]
-        temp_positions[i + 1] = ((rand() % SCREEN_HEIGHT) / (SCREEN_HEIGHT / 2.0f)) - 1.0f; // Normalize Y to [-1, 1]
-    }
-
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, NUM_BOIDS * 2 * sizeof(float), temp_positions, GL_DYNAMIC_DRAW);
-
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
-    glEnableVertexAttribArray(0);
-
-    cudaStatus = cudaGraphicsGLRegisterBuffer(&cudaVBO, VBO, cudaGraphicsRegisterFlagsNone);
+    cudaStatus = initBoids(&VBO, &VAO, &cudaVBO, &boidsVelocity);
     if (cudaStatus != cudaSuccess) {
-        std::cerr << "Error registering buffer with CUDA: " << cudaGetErrorString(cudaStatus) << std::endl;
-        return -1;
-    }
-
-    cudaStatus = cudaMalloc(&boidsVelocity.vx, NUM_BOIDS * sizeof(float));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        return -1;
-    }
-    cudaStatus = cudaMalloc(&boidsVelocity.vy, NUM_BOIDS * sizeof(float));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        return -1;
-    }
-
-    float* temp_vx = (float*)malloc(NUM_BOIDS * sizeof(float));
-    if (temp_vx == NULL)
-    {
-        fprintf(stderr, "malloc failed!");
-        return -1;
-    }
-    float* temp_vy = (float*)malloc(NUM_BOIDS * sizeof(float));
-    if (temp_vx == NULL)
-    {
-        fprintf(stderr, "malloc failed!");
+        fprintf(stderr, "Boids initialization failed: %s\n", cudaGetErrorString(cudaStatus));
         return -1;
     }
     
-    for (int i = 0; i < NUM_BOIDS; i++) {
-        temp_vx[i] = ((rand() % 20) - 10) / 10.0f;
-        temp_vy[i] = ((rand() % 20) - 10) / 10.0f;
-    }
-    
-
-    cudaStatus = cudaMemcpy(boidsVelocity.vx, temp_vx, NUM_BOIDS * sizeof(float), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        return -1;
-    }
-    cudaStatus = cudaMemcpy(boidsVelocity.vy, temp_vy, NUM_BOIDS * sizeof(float), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        return -1;
-    }
-
-    free(temp_vx);
-    free(temp_vy);
-    free(temp_positions);
-
     glPointSize(3.0f);
 
     while (!glfwWindowShouldClose(window))
@@ -319,11 +333,12 @@ int main()
         }
 
         // Update boids
-        updateBoids << <(NUM_BOIDS + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE >> > (temp_positions, boidsVelocity, NUM_BOIDS, DT);
+        updateBoids << <THREADS_NUM, BLOCK_SIZE >> > (temp_positions, boidsVelocity, NUM_BOIDS, DT);
 
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(err) << std::endl;
+        cudaStatus = cudaGetLastError();
+        if (cudaStatus != cudaSuccess) {
+            std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
+            return -1;
         }
         cudaDeviceSynchronize();
 
@@ -359,7 +374,7 @@ int main()
     cudaStatus = cudaDeviceReset();
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaDeviceReset failed!");
-        return 1;
+        return -1;
     }
 
     return 0;
