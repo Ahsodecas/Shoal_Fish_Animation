@@ -64,6 +64,17 @@ void fromNormalised(float* x, float* y, float* norm_x, float* norm_y)
 
 __global__ void updateBoids(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt)
 {
+   /* auto toNormalised = [](float& x, float& y, float& norm_x, float& norm_y)
+        {
+            norm_x = (x * 2) / SCREEN_WIDTH - 1.0f;
+            norm_y = 1.0f - (y * 2) / SCREEN_HEIGHT;
+        };
+    auto fromNormalised = [](float& x, float& y, float& norm_x, float& norm_y)
+        {
+            x = ((norm_x + 1.0f) / 2.0f) * SCREEN_WIDTH;
+            y = (1.0f - ((norm_y + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+        };*/
+
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= numBoids) return;
     float close_dx = 0, close_dy = 0;
@@ -74,7 +85,7 @@ __global__ void updateBoids(float* positions, BoidsVelocity boidsVelocity, int n
     float my_y = positions[2 * idx + 1];
     float my_vx = boidsVelocity.vx[idx];
     float my_vy = boidsVelocity.vy[idx];
-    //fromNormalised(&my_x, &my_y, &positions[2 * idx], &positions[2 * idx + 1]);
+    //fromNormalised(my_x, my_y, positions[2 * idx], positions[2 * idx + 1]);
     my_x = ((positions[2 * idx] + 1.0f) / 2.0f) * SCREEN_WIDTH;
     my_y = (1.0f - ((positions[2 * idx + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
 
@@ -139,7 +150,7 @@ __global__ void updateBoids(float* positions, BoidsVelocity boidsVelocity, int n
     my_y += my_vy * dt;
     boidsVelocity.vx[idx] = my_vx;
     boidsVelocity.vy[idx] = my_vy;
-    //fromNormalised(&my_x, &my_y, &positions[2 * idx], &positions[2 * idx + 1]);
+    //fromNormalised(my_x, my_y, positions[2 * idx], positions[2 * idx + 1]);
     positions[2 * idx] = (my_x * 2) / SCREEN_WIDTH - 1.0f;
     positions[2 * idx + 1] = 1.0f - (my_y * 2) / SCREEN_HEIGHT;
 }
@@ -178,7 +189,9 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 
 cudaError_t initBoids(GLuint* VBO, GLuint* VAO, cudaGraphicsResource** cudaVBO, BoidsVelocity* boidsVelocity)
 {
+    srand(time(NULL));
     cudaError_t cudaStatus;
+
     float* temp_positions = (float*)malloc(NUM_BOIDS * 2 * sizeof(float));
     if (temp_positions == NULL)
     {
@@ -260,6 +273,28 @@ cudaError_t initBoids(GLuint* VBO, GLuint* VAO, cudaGraphicsResource** cudaVBO, 
     return cudaSuccess;
 }
 
+void initShader(GLuint* shaderProgram)
+{
+    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vertexShader, 1, &vertexShaderSource, NULL);
+    glCompileShader(vertexShader);
+    checkShaderCompilation(vertexShader, "VERTEX");
+
+    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
+    glCompileShader(fragmentShader);
+    checkShaderCompilation(fragmentShader, "FRAGMENT");
+
+    *shaderProgram = glCreateProgram();
+    glAttachShader(*shaderProgram, vertexShader);
+    glAttachShader(*shaderProgram, fragmentShader);
+    glLinkProgram(*shaderProgram);
+    checkShaderCompilation(*shaderProgram, "PROGRAM");
+
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+}
+
 int main()
 {
     cudaError_t cudaStatus;
@@ -292,26 +327,8 @@ int main()
 
     glViewport(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
-
-    // Shader Compilation
-    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vertexShaderSource, NULL);
-    glCompileShader(vertexShader);
-    checkShaderCompilation(vertexShader, "VERTEX");
-
-    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
-    glCompileShader(fragmentShader);
-    checkShaderCompilation(fragmentShader, "FRAGMENT");
-
-    GLuint shaderProgram = glCreateProgram();
-    glAttachShader(shaderProgram, vertexShader);
-    glAttachShader(shaderProgram, fragmentShader);
-    glLinkProgram(shaderProgram);
-    checkShaderCompilation(shaderProgram, "PROGRAM");
-
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
+    GLuint shaderProgram;
+    initShader(&shaderProgram);
 
     GLuint VBO, VAO;
     cudaGraphicsResource* cudaVBO;
@@ -339,7 +356,6 @@ int main()
             return -1;
         }
 
-        // Update boids
         updateBoids << <THREADS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT);
 
         cudaStatus = cudaGetLastError();
@@ -357,7 +373,6 @@ int main()
             return -1;
         }
 
-        // Render
         glClear(GL_COLOR_BUFFER_BIT);
 
         glUseProgram(shaderProgram);
@@ -366,7 +381,6 @@ int main()
 
         glfwSwapBuffers(window);
         glfwPollEvents();
-
     }
 
     cudaGraphicsUnregisterResource(cudaVBO);
@@ -379,7 +393,8 @@ int main()
     
 
     cudaStatus = cudaDeviceReset();
-    if (cudaStatus != cudaSuccess) {
+    if (cudaStatus != cudaSuccess) 
+    {
         fprintf(stderr, "cudaDeviceReset failed!");
         return -1;
     }
