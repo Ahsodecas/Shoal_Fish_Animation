@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <iostream>
 
-#define NUM_BOIDS 5000 
+#define NUM_BOIDS 10000
 #define BLOCK_SIZE 256
 #define VISUAL_RANGE 50.0f
 #define PROTECTED_RANGE 10.0f
@@ -48,7 +48,9 @@ void main() {
 )";
 
 
-BoidsVelocity boidsVelocity;
+
+
+
 void toNormalised(float* x, float* y, float* norm_x, float* norm_y)
 {
     *norm_x = (*x * 2) / SCREEN_WIDTH - 1.0f;
@@ -117,9 +119,9 @@ __global__ void updateBoids(float* positions, BoidsVelocity boidsVelocity, int n
 
     // Edge Avoidance
     if (my_x < EDGE_MARGIN) my_vx += TURN_FACTOR;
-    if (my_x > 800 - EDGE_MARGIN) my_vx -= TURN_FACTOR;
+    if (my_x > SCREEN_WIDTH - EDGE_MARGIN) my_vx -= TURN_FACTOR;
     if (my_y < EDGE_MARGIN) my_vy += TURN_FACTOR;
-    if (my_y > 600 - EDGE_MARGIN) my_vy -= TURN_FACTOR;
+    if (my_y > SCREEN_HEIGHT - EDGE_MARGIN) my_vy -= TURN_FACTOR;
 
     // Speed Limits
     float speed = sqrt(my_vx * my_vx + my_vy * my_vy);
@@ -161,6 +163,19 @@ void checkShaderCompilation(GLuint shader, std::string type) {
     }
 }
 
+void processInput(GLFWwindow* window)
+{
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+    {
+        glfwSetWindowShouldClose(window, true);
+    }
+}
+
+void framebuffer_size_callback(GLFWwindow* window, int width, int height)
+{
+    glViewport(0, 0, width, height);
+}
+
 void initBoids()
 {
 
@@ -169,17 +184,6 @@ void initBoids()
 int main()
 {
     cudaError_t cudaStatus;
-
-    //int deviceCount = 0;
-    //cudaGetDeviceCount(&deviceCount);
-    //std::cout << "CUDA Device Count: " << deviceCount << std::endl;
-    //cudaDeviceReset();
-    //cudaStatus = cudaGLSetGLDevice(0);  // Select the correct GPU
-    //if (cudaStatus != cudaSuccess) {
-    //    std::cerr << "Failed to set CUDA GL Device: " << cudaGetErrorString(cudaStatus) << std::endl;
-    //    return -1;
-    //}
-
 
     if (!glfwInit())
     {
@@ -190,13 +194,14 @@ int main()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(800, 600, "Shoal of Fish", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Shoal of Fish", NULL, NULL);
     if (window == NULL)
     {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
         return -1;
     }
+    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwMakeContextCurrent(window);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
@@ -205,7 +210,7 @@ int main()
         return -1;
     }
 
-    glViewport(0, 0, 800, 600);
+    glViewport(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
 
 
     // Shader Compilation
@@ -228,7 +233,7 @@ int main()
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
 
-
+    BoidsVelocity boidsVelocity;
     GLuint VBO, VAO;
     cudaGraphicsResource* cudaVBO;
     float* temp_positions = (float*)malloc(NUM_BOIDS * 2 * sizeof(float));
@@ -239,15 +244,10 @@ int main()
 
 
     for (int i = 0; i < NUM_BOIDS * 2; i += 2) {
-        //std::cout << cudaVBO << " ";
-
-        temp_positions[i] = ((rand() % 800) / 400.0f) - 1.0f; // Normalize X to [-1, 1]
-        temp_positions[i + 1] = ((rand() % 600) / 300.0f) - 1.0f; // Normalize Y to [-1, 1]
-        /*((float*)cudaVBO)[i] = rand() % 800;
-        ((float*)cudaVBO)[i + 1] = rand() % 600;*/
-        //std::cout << &cudaVBO << " ";
+        temp_positions[i] = ((rand() % SCREEN_WIDTH) / (SCREEN_WIDTH / 2.0f)) - 1.0f; // Normalize X to [-1, 1]
+        temp_positions[i + 1] = ((rand() % SCREEN_HEIGHT) / (SCREEN_HEIGHT / 2.0f)) - 1.0f; // Normalize Y to [-1, 1]
     }
-    
+
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, NUM_BOIDS * 2 * sizeof(float), temp_positions, GL_DYNAMIC_DRAW);
 
@@ -272,33 +272,18 @@ int main()
     }
 
     float* temp_vx = (float*)malloc(NUM_BOIDS * sizeof(float));
+    if (temp_vx == NULL)
+    {
+        fprintf(stderr, "malloc failed!");
+        return -1;
+    }
     float* temp_vy = (float*)malloc(NUM_BOIDS * sizeof(float));
-
-    //cudaStatus = cudaGraphicsMapResources(1, &cudaVBO, 0);
-    //if (cudaStatus != cudaSuccess) {
-    //    std::cerr << "Error mapping CUDA resource!" << std::endl;
-    //    return -1;  
-    //}
-    //size_t size;
-    //cudaStatus = cudaGraphicsResourceGetMappedPointer((void**)&temp_positions, &size, cudaVBO);
-    //if (cudaStatus != cudaSuccess) {
-    //    std::cerr << "Error getting mapped pointer!" << std::endl;
-    //    return -1;  
-    //}
-    //for (int i = 0; i < NUM_BOIDS * 2; i += 2) {
-    //    //std::cout << cudaVBO << " ";
-    //    
-    //    ((float*)temp_positions)[i] = rand() % 800;
-    //    ((float*)temp_positions)[i + 1] = rand() % 600;
-    //    /*((float*)cudaVBO)[i] = rand() % 800;
-    //    ((float*)cudaVBO)[i + 1] = rand() % 600;*/
-    //    //std::cout << &cudaVBO << " ";
-    //}
-    //cudaStatus = cudaGraphicsUnmapResources(1, (cudaGraphicsResource**)&temp_positions, 0);
-    //if (cudaStatus != cudaSuccess) {
-    //    fprintf(stderr, "cudaGraphicsUnmapResources failed!");
-    //    return -1;
-    //}
+    if (temp_vx == NULL)
+    {
+        fprintf(stderr, "malloc failed!");
+        return -1;
+    }
+    
     for (int i = 0; i < NUM_BOIDS; i++) {
         temp_vx[i] = ((rand() % 20) - 10) / 10.0f;
         temp_vy[i] = ((rand() % 20) - 10) / 10.0f;
@@ -315,13 +300,16 @@ int main()
         fprintf(stderr, "cudaMemcpy failed!");
         return -1;
     }
+
     free(temp_vx);
     free(temp_vy);
     free(temp_positions);
 
     glPointSize(3.0f);
+
     while (!glfwWindowShouldClose(window))
     {
+        processInput(window);
 
         cudaGraphicsMapResources(1, &cudaVBO, 0);
         cudaStatus = cudaGraphicsResourceGetMappedPointer((void**)&temp_positions, NULL, cudaVBO);
@@ -368,8 +356,6 @@ int main()
     glfwTerminate();
     
 
-    // cudaDeviceReset must be called before exiting in order for profiling and
-    // tracing tools such as Nsight and Visual Profiler to show complete traces.
     cudaStatus = cudaDeviceReset();
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaDeviceReset failed!");
