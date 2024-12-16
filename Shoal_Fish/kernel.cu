@@ -21,8 +21,8 @@
 #define DT 0.1f
 #define TURN_FACTOR 1.0f
 #define EDGE_MARGIN 50.0f
-#define SCREEN_HEIGHT 600
-#define SCREEN_WIDTH 800
+#define SCREEN_HEIGHT 1024
+#define SCREEN_WIDTH 1840
 
 
 struct BoidsVelocity
@@ -62,38 +62,27 @@ void fromNormalised(float* x, float* y, float* norm_x, float* norm_y)
     *y = (1.0f - ((*norm_y + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
 }
 
-__global__ void updateBoids(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt)
+__global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt)
 {
-   /* auto toNormalised = [](float& x, float& y, float& norm_x, float& norm_y)
-        {
-            norm_x = (x * 2) / SCREEN_WIDTH - 1.0f;
-            norm_y = 1.0f - (y * 2) / SCREEN_HEIGHT;
-        };
-    auto fromNormalised = [](float& x, float& y, float& norm_x, float& norm_y)
-        {
-            x = ((norm_x + 1.0f) / 2.0f) * SCREEN_WIDTH;
-            y = (1.0f - ((norm_y + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
-        };*/
-
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= numBoids) return;
     float close_dx = 0, close_dy = 0;
     float xvel_avg = 0, yvel_avg = 0, xpos_avg = 0, ypos_avg = 0;
     int neighbors = 0;
 
-    float my_x = positions[2 * idx];
-    float my_y = positions[2 * idx + 1];
+    float my_x = positions[6 * idx];
+    float my_y = positions[6 * idx + 1];
     float my_vx = boidsVelocity.vx[idx];
     float my_vy = boidsVelocity.vy[idx];
     //fromNormalised(my_x, my_y, positions[2 * idx], positions[2 * idx + 1]);
-    my_x = ((positions[2 * idx] + 1.0f) / 2.0f) * SCREEN_WIDTH;
-    my_y = (1.0f - ((positions[2 * idx + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+    my_x = ((positions[6 * idx] + 1.0f) / 2.0f) * SCREEN_WIDTH;
+    my_y = (1.0f - ((positions[6 * idx + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
 
     // Loop through all boids
     for (int i = 0; i < numBoids; i++) {
         if (i == idx) continue;
-        float x = ((positions[2 * i] + 1.0f) / 2.0f) * SCREEN_WIDTH;
-        float y = (1.0f - ((positions[2 * i + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+        float x = ((positions[6 * i] + 1.0f) / 2.0f) * SCREEN_WIDTH;
+        float y = (1.0f - ((positions[6 * i + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
         float dx = x - my_x;
         float dy = y - my_y;
         float dist = sqrt(dx * dx + dy * dy);
@@ -151,23 +140,38 @@ __global__ void updateBoids(float* positions, BoidsVelocity boidsVelocity, int n
     boidsVelocity.vx[idx] = my_vx;
     boidsVelocity.vy[idx] = my_vy;
     //fromNormalised(my_x, my_y, positions[2 * idx], positions[2 * idx + 1]);
-    positions[2 * idx] = (my_x * 2) / SCREEN_WIDTH - 1.0f;
-    positions[2 * idx + 1] = 1.0f - (my_y * 2) / SCREEN_HEIGHT;
+    /*positions[2 * idx] = (my_x * 2) / SCREEN_WIDTH - 1.0f;
+    positions[2 * idx + 1] = 1.0f - (my_y * 2) / SCREEN_HEIGHT;*/
+}
+
+__global__ void updateBoidsPosition(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt)
+{
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx >= numBoids) return;
+    float my_x = ((positions[6 * idx] + 1.0f) / 2.0f) * SCREEN_WIDTH;
+    float my_y = (1.0f - ((positions[6 * idx + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+    my_x += boidsVelocity.vx[idx] * dt;
+    my_y += boidsVelocity.vy[idx] * dt;
+    positions[6 * idx] = (my_x * 2) / SCREEN_WIDTH - 1.0f;
+    positions[6 * idx + 1] = 1.0f - (my_y * 2) / SCREEN_HEIGHT;
 }
 
 void checkShaderCompilation(GLuint shader, std::string type) {
     GLint success;
     char infoLog[512];
-    if (type == "PROGRAM") {
+    if (type == "PROGRAM") 
+    {
         glGetProgramiv(shader, GL_LINK_STATUS, &success);
-        if (!success) {
+        if (!success) 
+        {
             glGetProgramInfoLog(shader, 512, NULL, infoLog);
             std::cerr << "ERROR::PROGRAM_LINKING_ERROR: " << infoLog << std::endl;
         }
     }
     else {
         glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-        if (!success) {
+        if (!success) 
+        {
             glGetShaderInfoLog(shader, 512, NULL, infoLog);
             std::cerr << "ERROR::SHADER_COMPILATION_ERROR (" << type << "): " << infoLog << std::endl;
         }
@@ -192,7 +196,7 @@ cudaError_t initBoids(GLuint* VBO, GLuint* VAO, cudaGraphicsResource** cudaVBO, 
     srand(time(NULL));
     cudaError_t cudaStatus;
 
-    float* temp_positions = (float*)malloc(NUM_BOIDS * 2 * sizeof(float));
+    float* temp_positions = (float*)malloc(3 * NUM_BOIDS * 2 * sizeof(float));
     if (temp_positions == NULL)
     {
         fprintf(stderr, "malloc failed!");
@@ -215,14 +219,14 @@ cudaError_t initBoids(GLuint* VBO, GLuint* VAO, cudaGraphicsResource** cudaVBO, 
     glGenBuffers(1, VBO);
     glBindVertexArray(*VAO);
 
-    for (int i = 0; i < NUM_BOIDS * 2; i += 2) 
+    for (int i = 0; i < 3 * NUM_BOIDS * 2; i += 2) 
     {
         temp_positions[i] = ((rand() % SCREEN_WIDTH) / (SCREEN_WIDTH / 2.0f)) - 1.0f; // Normalize X to [-1, 1]
         temp_positions[i + 1] = ((rand() % SCREEN_HEIGHT) / (SCREEN_HEIGHT / 2.0f)) - 1.0f; // Normalize Y to [-1, 1]
     }
 
     glBindBuffer(GL_ARRAY_BUFFER, *VBO);
-    glBufferData(GL_ARRAY_BUFFER, NUM_BOIDS * 2 * sizeof(float), temp_positions, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, 3 * NUM_BOIDS * 2 * sizeof(float), temp_positions, GL_DYNAMIC_DRAW);
 
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
     glEnableVertexAttribArray(0);
@@ -295,10 +299,40 @@ void initShader(GLuint* shaderProgram)
     glDeleteShader(fragmentShader);
 }
 
+__global__ void calculateTriangleVertices(float* positions, BoidsVelocity boidsVelocity, int num_boids)
+{
+    int boid_index = blockIdx.x * blockDim.x + threadIdx.x;
+    int index = boid_index * 6;
+    if (boid_index >= num_boids) return;
+
+    float my_x = ((positions[index] + 1.0f) / 2.0f) * SCREEN_WIDTH;
+    float my_y = (1.0f - ((positions[index + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+
+    //We draw boids as eqiulateral triangles of height 5*sqrt(3) heading in direction pointed by point (pos_X[index_0], pos_Y[index_0])
+    float s = sqrtf(3);
+    float triangle_h = 5 * s;
+    float vector_length = sqrt(boidsVelocity.vx[boid_index] * boidsVelocity.vx[boid_index] + boidsVelocity.vy[boid_index] * boidsVelocity.vy[boid_index]);
+    float h_x = my_x - (triangle_h * (boidsVelocity.vx[boid_index] / vector_length));
+    float h_y = my_y - (triangle_h * (boidsVelocity.vy[boid_index] / vector_length));
+
+    float x1 = h_x + ((my_y - h_y) / s);
+    float x2 = h_x + ((h_y - my_y) / s);
+    float y1 = h_y + ((h_x - my_x) / s);
+    float y2 = h_y + ((my_x - h_x) / s);
+
+    positions[index] = positions[index];
+    positions[index + 2] = ((x1 + 1.0f) / 2.0f) * SCREEN_WIDTH;
+    positions[index + 4] = ((x2 + 1.0f) / 2.0f) * SCREEN_WIDTH;
+    
+    positions[index + 1] = positions[index + 1];
+    positions[index + 3] = (1.0f - ((y1 + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+    positions[index + 5] = (1.0f - ((y2 + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+}
+
 int main()
 {
     cudaError_t cudaStatus;
-    int THREADS_NUM = (NUM_BOIDS + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int BLOCKS_NUM = (NUM_BOIDS + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     if (!glfwInit())
     {
@@ -342,7 +376,7 @@ int main()
         return -1;
     }
     
-    glPointSize(3.0f);
+    glPointSize(2.0f);
 
     while (!glfwWindowShouldClose(window))
     {
@@ -356,7 +390,22 @@ int main()
             return -1;
         }
 
-        updateBoids << <THREADS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT);
+        updateBoidsVelocity << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT);
+        cudaStatus = cudaDeviceSynchronize();
+        if (cudaStatus != cudaSuccess)
+        {
+            fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
+            return -1;
+        }
+        updateBoidsPosition << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT);
+
+        cudaStatus = cudaDeviceSynchronize();
+        if (cudaStatus != cudaSuccess)
+        {
+            fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
+            return -1;
+        }
+        calculateTriangleVertices << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS);
 
         cudaStatus = cudaGetLastError();
         if (cudaStatus != cudaSuccess) 
@@ -364,7 +413,13 @@ int main()
             std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
             return -1;
         }
-        cudaDeviceSynchronize();
+
+        cudaStatus = cudaDeviceSynchronize();
+        if (cudaStatus != cudaSuccess)
+        {
+            fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
+            return -1;
+        }
 
         cudaStatus = cudaGraphicsUnmapResources(1, &cudaVBO, 0);
         if (cudaStatus != cudaSuccess) 
@@ -377,7 +432,7 @@ int main()
 
         glUseProgram(shaderProgram);
         glBindVertexArray(VAO);
-        glDrawArrays(GL_POINTS, 0, NUM_BOIDS);
+        glDrawArrays(GL_TRIANGLES, 0, 3 * NUM_BOIDS);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
