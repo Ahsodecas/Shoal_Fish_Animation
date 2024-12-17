@@ -20,8 +20,8 @@
 #define MIN_SPEED 2.0f
 #define MAX_SPEED 10.0f
 #define DT 0.1f
-#define TURN_FACTOR 1.5f
-#define EDGE_MARGIN 20.0f
+#define TURN_FACTOR 0.15f
+#define EDGE_MARGIN 70.0f
 #define SCREEN_HEIGHT 900
 #define SCREEN_WIDTH 1800
 
@@ -355,7 +355,7 @@ __global__ void calculateTriangleVertices(float* positions, BoidsVelocity boidsV
     float my_x = ((positions[index] + 1.0f) / 2.0f) * SCREEN_WIDTH;
     float my_y = (1.0f - ((positions[index + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
 
-    //We draw boids as eqiulateral triangles of height 5*sqrt(3) heading in direction pointed by point (pos_X[index_0], pos_Y[index_0])
+    // Boids are drawn as isosceles triangles of height 5*sqrt(3) heading in direction pointed by point (positions[index], positions[index + 1])
     float s =  2 * sqrtf(3);
     float triangle_h = 5 * sqrtf(3);
 
