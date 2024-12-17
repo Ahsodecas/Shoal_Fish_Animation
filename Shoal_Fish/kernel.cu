@@ -13,18 +13,22 @@
 #define BLOCK_SIZE 256
 #define VISUAL_RANGE 50.0f
 #define PROTECTED_RANGE 10.0f
-#define AVOID_FACTOR 0.1f
+#define AVOID_FACTOR 0.05f
+#define CURSOR_AVOID_FACTOR 5.0f
 #define MATCHING_FACTOR 0.05f
 #define CENTERING_FACTOR 0.001f
 #define MIN_SPEED 2.0f
 #define MAX_SPEED 10.0f
 #define DT 0.1f
 #define TURN_FACTOR 1.5f
-#define EDGE_MARGIN 50.0f
-#define SCREEN_HEIGHT 1024
+#define EDGE_MARGIN 20.0f
+#define SCREEN_HEIGHT 900
 #define SCREEN_WIDTH 1800
 
 bool Moving = true;
+bool CursorOverWindow = false;
+double cursorX;
+double cursorY;
 
 
 struct BoidsVelocity
@@ -64,7 +68,7 @@ void fromNormalised(float* x, float* y, float* norm_x, float* norm_y)
     *y = (1.0f - ((*norm_y + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
 }
 
-__global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt)
+__global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt, bool cursorOverWindow, double cursorX, double cursorY)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= numBoids) return;
@@ -81,7 +85,8 @@ __global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocit
     my_y = (1.0f - ((positions[6 * idx + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
 
     // Loop through all boids
-    for (int i = 0; i < numBoids; i++) {
+    for (int i = 0; i < numBoids; i++) 
+    {
         if (i == idx) continue;
         float x = ((positions[6 * i] + 1.0f) / 2.0f) * SCREEN_WIDTH;
         float y = (1.0f - ((positions[6 * i + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
@@ -89,11 +94,13 @@ __global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocit
         float dy = y - my_y;
         float dist = sqrt(dx * dx + dy * dy);
 
-        if (dist < PROTECTED_RANGE) { // Separation
+        if (dist < PROTECTED_RANGE) 
+        { // Separation
             close_dx -= dx;
             close_dy -= dy;
         }
-        if (dist < VISUAL_RANGE) { // Alignment and Cohesion
+        if (dist < VISUAL_RANGE) 
+        { // Alignment and Cohesion
             xvel_avg += boidsVelocity.vx[i];
             yvel_avg += boidsVelocity.vy[i];
             xpos_avg += x;
@@ -103,7 +110,8 @@ __global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocit
     }
 
     // Calculate alignment and cohesion
-    if (neighbors > 0) {
+    if (neighbors > 0) 
+    {
         xvel_avg /= neighbors;
         yvel_avg /= neighbors;
         xpos_avg /= neighbors;
@@ -119,6 +127,19 @@ __global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocit
     my_vx += close_dx * AVOID_FACTOR;  // Separation
     my_vy += close_dy * AVOID_FACTOR;
 
+    // Avoid cursor
+    if (cursorOverWindow)
+    {
+        float dx_cursor = cursorX - my_x;
+        float dy_cursor = cursorY - my_y;
+        float dist_cursor = sqrtf(dx_cursor * dx_cursor + dy_cursor * dy_cursor);
+        if (dist_cursor < VISUAL_RANGE)
+        {
+            my_vx -= dx_cursor * CURSOR_AVOID_FACTOR;
+            my_vy -= dy_cursor * CURSOR_AVOID_FACTOR;
+        }
+    }
+
     // Edge Avoidance
     if (my_x < EDGE_MARGIN) my_vx += TURN_FACTOR;
     if (my_x > SCREEN_WIDTH - EDGE_MARGIN) my_vx -= TURN_FACTOR;
@@ -127,11 +148,13 @@ __global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocit
 
     // Speed Limits
     float speed = sqrt(my_vx * my_vx + my_vy * my_vy);
-    if (speed < MIN_SPEED) {
+    if (speed < MIN_SPEED) 
+    {
         my_vx = (my_vx / speed) * MIN_SPEED;
         my_vy = (my_vy / speed) * MIN_SPEED;
     }
-    if (speed > MAX_SPEED) {
+    if (speed > MAX_SPEED)
+    {
         my_vx = (my_vx / speed) * MAX_SPEED;
         my_vy = (my_vy / speed) * MAX_SPEED;
     }
@@ -158,7 +181,8 @@ __global__ void updateBoidsPosition(float* positions, BoidsVelocity boidsVelocit
     positions[6 * idx + 1] = 1.0f - (my_y * 2) / SCREEN_HEIGHT;
 }
 
-void checkShaderCompilation(GLuint shader, std::string type) {
+void checkShaderCompilation(GLuint shader, std::string type)
+{
     GLint success;
     char infoLog[512];
     if (type == "PROGRAM") 
@@ -190,6 +214,23 @@ void processInput(GLFWwindow* window, int key, int scancode, int action, int mod
     {
         Moving = !Moving;
     }
+}
+
+void cursorEnterCallback(GLFWwindow* window, int entered)
+{
+    if (entered) 
+    {
+        CursorOverWindow = true;
+    }
+    else {
+        CursorOverWindow = false;
+    }
+}
+
+void cursorPositionCallback(GLFWwindow* window, double xpos, double ypos)
+{
+    cursorX = xpos;
+    cursorY = ypos;
 }
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)
@@ -363,6 +404,7 @@ int main()
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwMakeContextCurrent(window);
     glfwSetKeyCallback(window, processInput);
+    glfwSetCursorEnterCallback(window, cursorEnterCallback);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
@@ -395,6 +437,9 @@ int main()
 
         if (Moving)
         {
+            if (CursorOverWindow) {
+                glfwGetCursorPos(window, &cursorX, &cursorY);
+            }
             cudaGraphicsMapResources(1, &cudaVBO, 0);
             cudaStatus = cudaGraphicsResourceGetMappedPointer((void**)&boids_positions, NULL, cudaVBO);
             if (cudaStatus != cudaSuccess) 
@@ -403,7 +448,13 @@ int main()
                 return -1;
             }
         
-            updateBoidsVelocity << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT);
+            updateBoidsVelocity << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT, CursorOverWindow, cursorX, cursorY);
+            cudaStatus = cudaGetLastError();
+            if (cudaStatus != cudaSuccess)
+            {
+                std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
+                return -1;
+            }
             cudaStatus = cudaDeviceSynchronize();
             if (cudaStatus != cudaSuccess)
             {
@@ -411,7 +462,12 @@ int main()
                 return -1;
             }
             updateBoidsPosition << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT);
-
+            cudaStatus = cudaGetLastError();
+            if (cudaStatus != cudaSuccess)
+            {
+                std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
+                return -1;
+            }
             cudaStatus = cudaDeviceSynchronize();
             if (cudaStatus != cudaSuccess)
             {
