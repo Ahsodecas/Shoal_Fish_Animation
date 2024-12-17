@@ -17,9 +17,10 @@
 #define CURSOR_AVOID_FACTOR 5.0f
 #define MATCHING_FACTOR 0.05f
 #define CENTERING_FACTOR 0.001f
+#define BIAS 0.2f
 #define MIN_SPEED 2.0f
 #define MAX_SPEED 10.0f
-#define DT 0.1f
+#define DT 0.4f
 #define TURN_FACTOR 0.15f
 #define EDGE_MARGIN 70.0f
 #define SCREEN_HEIGHT 900
@@ -52,9 +53,6 @@ void main() {
     FragColor = vec4(0.1, 0.6, 0.9, 1.0); // Light blue
 }
 )";
-
-
-
 
 
 void toNormalised(float* x, float* y, float* norm_x, float* norm_y)
@@ -139,6 +137,19 @@ __global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocit
             my_vy -= dy_cursor * CURSOR_AVOID_FACTOR;
         }
     }
+
+    // Bias 
+    // biased to the right
+    if (idx % 419 == 0)
+    {
+        my_vx = (1 - BIAS) * my_vx + (BIAS * 1);
+    } 
+    // biased to the left
+    else if (idx % 409 == 0)
+    {
+        my_vx = (1 - BIAS) * my_vx + (BIAS * (-1));
+    }
+        
 
     // Edge Avoidance
     if (my_x < EDGE_MARGIN) my_vx += TURN_FACTOR;
