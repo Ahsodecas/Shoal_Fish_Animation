@@ -15,14 +15,16 @@
 #define PROTECTED_RANGE 10.0f
 #define AVOID_FACTOR 0.1f
 #define MATCHING_FACTOR 0.05f
-#define CENTERING_FACTOR 0.01f
+#define CENTERING_FACTOR 0.001f
 #define MIN_SPEED 2.0f
 #define MAX_SPEED 10.0f
 #define DT 0.1f
-#define TURN_FACTOR 1.0f
+#define TURN_FACTOR 1.5f
 #define EDGE_MARGIN 50.0f
 #define SCREEN_HEIGHT 1024
-#define SCREEN_WIDTH 1500
+#define SCREEN_WIDTH 1800
+
+bool Moving = true;
 
 
 struct BoidsVelocity
@@ -178,11 +180,15 @@ void checkShaderCompilation(GLuint shader, std::string type) {
     }
 }
 
-void processInput(GLFWwindow* window)
+void processInput(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
     {
         glfwSetWindowShouldClose(window, true);
+    }
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+    {
+        Moving = !Moving;
     }
 }
 
@@ -309,8 +315,11 @@ __global__ void calculateTriangleVertices(float* positions, BoidsVelocity boidsV
     float my_y = (1.0f - ((positions[index + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
 
     //We draw boids as eqiulateral triangles of height 5*sqrt(3) heading in direction pointed by point (pos_X[index_0], pos_Y[index_0])
-    float s = sqrtf(3);
-    float triangle_h = 5 * s;
+    float s =  2 * sqrtf(3);
+    float triangle_h = 5 * sqrtf(3);
+
+
+
     float vector_length = sqrt(boidsVelocity.vx[boid_index] * boidsVelocity.vx[boid_index] + boidsVelocity.vy[boid_index] * boidsVelocity.vy[boid_index]);
     float h_x = my_x - (triangle_h * (boidsVelocity.vx[boid_index] / vector_length));
     float h_y = my_y - (triangle_h * (boidsVelocity.vy[boid_index] / vector_length));
@@ -353,6 +362,7 @@ int main()
     }
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwMakeContextCurrent(window);
+    glfwSetKeyCallback(window, processInput);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
@@ -381,54 +391,56 @@ int main()
 
     while (!glfwWindowShouldClose(window))
     {
-        processInput(window);
+        //processInput(window);
 
-        cudaGraphicsMapResources(1, &cudaVBO, 0);
-        cudaStatus = cudaGraphicsResourceGetMappedPointer((void**)&boids_positions, NULL, cudaVBO);
-        if (cudaStatus != cudaSuccess) 
+        if (Moving)
         {
-            fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
-            return -1;
-        }
+            cudaGraphicsMapResources(1, &cudaVBO, 0);
+            cudaStatus = cudaGraphicsResourceGetMappedPointer((void**)&boids_positions, NULL, cudaVBO);
+            if (cudaStatus != cudaSuccess) 
+            {
+                fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                return -1;
+            }
+        
+            updateBoidsVelocity << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT);
+            cudaStatus = cudaDeviceSynchronize();
+            if (cudaStatus != cudaSuccess)
+            {
+                fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                return -1;
+            }
+            updateBoidsPosition << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT);
 
-        updateBoidsVelocity << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT);
-        cudaStatus = cudaDeviceSynchronize();
-        if (cudaStatus != cudaSuccess)
-        {
-            fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
-            return -1;
-        }
-        updateBoidsPosition << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT);
+            cudaStatus = cudaDeviceSynchronize();
+            if (cudaStatus != cudaSuccess)
+            {
+                fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                return -1;
+            }
+            calculateTriangleVertices << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS);
 
-        cudaStatus = cudaDeviceSynchronize();
-        if (cudaStatus != cudaSuccess)
-        {
-            fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
-            return -1;
-        }
-        calculateTriangleVertices << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS);
+            cudaStatus = cudaGetLastError();
+            if (cudaStatus != cudaSuccess)
+            {
+                std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
+                return -1;
+            }
 
-        cudaStatus = cudaGetLastError();
-        if (cudaStatus != cudaSuccess) 
-        {
-            std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
-            return -1;
-        }
+            cudaStatus = cudaDeviceSynchronize();
+            if (cudaStatus != cudaSuccess)
+            {
+                fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                return -1;
+            }
 
-        cudaStatus = cudaDeviceSynchronize();
-        if (cudaStatus != cudaSuccess)
-        {
-            fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
-            return -1;
+            cudaStatus = cudaGraphicsUnmapResources(1, &cudaVBO, 0);
+            if (cudaStatus != cudaSuccess)
+            {
+                fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                return -1;
+            }
         }
-
-        cudaStatus = cudaGraphicsUnmapResources(1, &cudaVBO, 0);
-        if (cudaStatus != cudaSuccess) 
-        {
-            fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
-            return -1;
-        }
-
         glClear(GL_COLOR_BUFFER_BIT);
 
         glUseProgram(shaderProgram);
