@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <iostream>
 
+#define ITERATIONS 1000
 #define NUM_BOIDS 10000
 #define BLOCK_SIZE 256
 #define VISUAL_RANGE 50.0f
@@ -507,6 +508,10 @@ int main()
     
     glPointSize(2.0f);
 
+    int iterations = 0;
+    clock_t start = clock();
+    clock_t end;
+
     while (!glfwWindowShouldClose(window))
     {
 
@@ -532,7 +537,25 @@ int main()
 
         glfwSwapBuffers(window);
         glfwPollEvents();
+
+        iterations++;
+        if (iterations == ITERATIONS)
+        {
+            end = clock();
+        }
+
     }
+
+    if (iterations < ITERATIONS)
+    {
+        end = clock();
+    }
+    else
+    {
+        iterations = ITERATIONS;
+    }
+    float loopTime = (float)(end - start) / CLOCKS_PER_SEC;
+    printf("Time taken for %i iterations: %f\n", iterations, loopTime);
 
     cudaGraphicsUnregisterResource(cudaVBO);
     glDeleteBuffers(1, &VBO);
