@@ -391,6 +391,71 @@ __global__ void calculateTriangleVertices(float* positions, BoidsVelocity boidsV
     positions[index + 5] = 1.0f - (y2 * 2) / SCREEN_HEIGHT;
 }
 
+cudaError oneIteration(cudaGraphicsResource** cudaVBO, float ** boids_positions, BoidsVelocity* boidsVelocity, int BLOCKS_NUM)
+{
+    cudaError cudaStatus;
+
+    cudaGraphicsMapResources(1, cudaVBO, 0);
+
+    cudaStatus = cudaGraphicsResourceGetMappedPointer((void**)boids_positions, NULL, *cudaVBO);
+    if (cudaStatus != cudaSuccess)
+    {
+        fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+
+    updateBoidsVelocity << <BLOCKS_NUM, BLOCK_SIZE >> > (*boids_positions, *boidsVelocity, NUM_BOIDS, DT, CursorOverWindow, cursorX, cursorY);
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess)
+    {
+        std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
+        return cudaStatus;
+    }
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess)
+    {
+        fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+    updateBoidsPosition << <BLOCKS_NUM, BLOCK_SIZE >> > (*boids_positions, *boidsVelocity, NUM_BOIDS, DT);
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess)
+    {
+        std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
+        return cudaStatus;
+    }
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess)
+    {
+        fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+    calculateTriangleVertices << <BLOCKS_NUM, BLOCK_SIZE >> > (*boids_positions, *boidsVelocity, NUM_BOIDS);
+
+    cudaStatus = cudaGetLastError();
+    if (cudaStatus != cudaSuccess)
+    {
+        std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
+        return cudaStatus;
+    }
+
+    cudaStatus = cudaDeviceSynchronize();
+    if (cudaStatus != cudaSuccess)
+    {
+        fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+
+    cudaStatus = cudaGraphicsUnmapResources(1, cudaVBO, 0);
+    if (cudaStatus != cudaSuccess)
+    {
+        fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
+
+    return cudaSuccess;
+}
+
 int main()
 {
     cudaError_t cudaStatus;
@@ -444,67 +509,18 @@ int main()
 
     while (!glfwWindowShouldClose(window))
     {
-        //processInput(window);
 
         if (Moving)
         {
-            if (CursorOverWindow) {
+            if (CursorOverWindow) 
+            {
                 glfwGetCursorPos(window, &cursorX, &cursorY);
             }
-            cudaGraphicsMapResources(1, &cudaVBO, 0);
-            cudaStatus = cudaGraphicsResourceGetMappedPointer((void**)&boids_positions, NULL, cudaVBO);
-            if (cudaStatus != cudaSuccess) 
-            {
-                fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
-                return -1;
-            }
-        
-            updateBoidsVelocity << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT, CursorOverWindow, cursorX, cursorY);
-            cudaStatus = cudaGetLastError();
-            if (cudaStatus != cudaSuccess)
-            {
-                std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
-                return -1;
-            }
-            cudaStatus = cudaDeviceSynchronize();
-            if (cudaStatus != cudaSuccess)
-            {
-                fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
-                return -1;
-            }
-            updateBoidsPosition << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS, DT);
-            cudaStatus = cudaGetLastError();
-            if (cudaStatus != cudaSuccess)
-            {
-                std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
-                return -1;
-            }
-            cudaStatus = cudaDeviceSynchronize();
-            if (cudaStatus != cudaSuccess)
-            {
-                fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
-                return -1;
-            }
-            calculateTriangleVertices << <BLOCKS_NUM, BLOCK_SIZE >> > (boids_positions, boidsVelocity, NUM_BOIDS);
 
-            cudaStatus = cudaGetLastError();
+            cudaStatus = oneIteration(&cudaVBO, &boids_positions, &boidsVelocity, BLOCKS_NUM);
             if (cudaStatus != cudaSuccess)
             {
-                std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
-                return -1;
-            }
-
-            cudaStatus = cudaDeviceSynchronize();
-            if (cudaStatus != cudaSuccess)
-            {
-                fprintf(stderr, "cudaDeviceSynchronize launch failed: %s\n", cudaGetErrorString(cudaStatus));
-                return -1;
-            }
-
-            cudaStatus = cudaGraphicsUnmapResources(1, &cudaVBO, 0);
-            if (cudaStatus != cudaSuccess)
-            {
-                fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                fprintf(stderr, "iteration launch failed: %s\n", cudaGetErrorString(cudaStatus));
                 return -1;
             }
         }
