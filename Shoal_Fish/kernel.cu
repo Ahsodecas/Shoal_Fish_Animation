@@ -79,11 +79,9 @@ __global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocit
     float my_y = positions[6 * idx + 1];
     float my_vx = boidsVelocity.vx[idx];
     float my_vy = boidsVelocity.vy[idx];
-    //fromNormalised(my_x, my_y, positions[2 * idx], positions[2 * idx + 1]);
     my_x = ((positions[6 * idx] + 1.0f) / 2.0f) * SCREEN_WIDTH;
     my_y = (1.0f - ((positions[6 * idx + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
 
-    // Loop through all boids
     for (int i = 0; i < numBoids; i++) 
     {
         if (i == idx) continue;
@@ -93,13 +91,15 @@ __global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocit
         float dy = y - my_y;
         float dist = sqrt(dx * dx + dy * dy);
 
+        // Separation
         if (dist < PROTECTED_RANGE) 
-        { // Separation
+        { 
             close_dx -= dx;
             close_dy -= dy;
         }
+        // Alignment and Cohesion
         if (dist < VISUAL_RANGE) 
-        { // Alignment and Cohesion
+        { 
             xvel_avg += boidsVelocity.vx[i];
             yvel_avg += boidsVelocity.vy[i];
             xpos_avg += x;
@@ -116,14 +116,17 @@ __global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocit
         xpos_avg /= neighbors;
         ypos_avg /= neighbors;
 
-        my_vx += (xvel_avg - my_vx) * MATCHING_FACTOR;   // Alignment
+        // Alignment
+        my_vx += (xvel_avg - my_vx) * MATCHING_FACTOR;   
         my_vy += (yvel_avg - my_vy) * MATCHING_FACTOR;
 
-        my_vx += (xpos_avg - my_x) * CENTERING_FACTOR;   // Cohesion
+        // Cohesion
+        my_vx += (xpos_avg - my_x) * CENTERING_FACTOR;   
         my_vy += (ypos_avg - my_y) * CENTERING_FACTOR;
     }
 
-    my_vx += close_dx * AVOID_FACTOR;  // Separation
+    // Separation
+    my_vx += close_dx * AVOID_FACTOR;  
     my_vy += close_dy * AVOID_FACTOR;
 
     // Avoid cursor
@@ -151,7 +154,6 @@ __global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocit
         my_vx = (1 - BIAS) * my_vx + (BIAS * (-1));
     }
         
-
     // Edge Avoidance
     if (my_x < EDGE_MARGIN) my_vx += TURN_FACTOR;
     if (my_x > SCREEN_WIDTH - EDGE_MARGIN) my_vx -= TURN_FACTOR;
@@ -171,14 +173,10 @@ __global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocit
         my_vy = (my_vy / speed) * MAX_SPEED;
     }
 
-    // Update position
     my_x += my_vx * dt;
     my_y += my_vy * dt;
     boidsVelocity.vx[idx] = my_vx;
     boidsVelocity.vy[idx] = my_vy;
-    //fromNormalised(my_x, my_y, positions[2 * idx], positions[2 * idx + 1]);
-    /*positions[2 * idx] = (my_x * 2) / SCREEN_WIDTH - 1.0f;
-    positions[2 * idx + 1] = 1.0f - (my_y * 2) / SCREEN_HEIGHT;*/
 }
 
 __global__ void updateBoidsPosition(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt)
@@ -396,7 +394,12 @@ cudaError oneIteration(cudaGraphicsResource** cudaVBO, float ** boids_positions,
 {
     cudaError cudaStatus;
 
-    cudaGraphicsMapResources(1, cudaVBO, 0);
+    cudaStatus = cudaGraphicsMapResources(1, cudaVBO, 0);
+    if (cudaStatus != cudaSuccess)
+    {
+        fprintf(stderr, "cudaGraphicsMapResources launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        return cudaStatus;
+    }
 
     cudaStatus = cudaGraphicsResourceGetMappedPointer((void**)boids_positions, NULL, *cudaVBO);
     if (cudaStatus != cudaSuccess)
@@ -409,7 +412,7 @@ cudaError oneIteration(cudaGraphicsResource** cudaVBO, float ** boids_positions,
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess)
     {
-        std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
+        fprintf(stderr, "CUDA kernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
         return cudaStatus;
     }
     cudaStatus = cudaDeviceSynchronize();
@@ -422,7 +425,7 @@ cudaError oneIteration(cudaGraphicsResource** cudaVBO, float ** boids_positions,
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess)
     {
-        std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
+        fprintf(stderr, "CUDA kernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
         return cudaStatus;
     }
     cudaStatus = cudaDeviceSynchronize();
@@ -436,7 +439,7 @@ cudaError oneIteration(cudaGraphicsResource** cudaVBO, float ** boids_positions,
     cudaStatus = cudaGetLastError();
     if (cudaStatus != cudaSuccess)
     {
-        std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
+        fprintf(stderr, "CUDA kernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
         return cudaStatus;
     }
 
@@ -457,6 +460,16 @@ cudaError oneIteration(cudaGraphicsResource** cudaVBO, float ** boids_positions,
     return cudaSuccess;
 }
 
+void cleanUp(GLuint* VBO, GLuint* VAO, BoidsVelocity* boidsVelocity, GLuint* shaderProgram)
+{
+    glDeleteBuffers(1, VBO);
+    glDeleteVertexArrays(1, VAO);
+    cudaFree(boidsVelocity->vx);
+    cudaFree(boidsVelocity->vy);
+    glDeleteProgram(*shaderProgram);
+    glfwTerminate();
+}
+
 int main()
 {
     cudaError_t cudaStatus;
@@ -464,7 +477,7 @@ int main()
 
     if (!glfwInit())
     {
-        std::cout << "Failed to initialize the GLFW library" << std::endl;
+        fprintf(stderr, "Failed to initialize the GLFW library\n");
         return -1;
     }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -474,7 +487,7 @@ int main()
     GLFWwindow* window = glfwCreateWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Shoal of Fish", NULL, NULL);
     if (window == NULL)
     {
-        std::cout << "Failed to create GLFW window" << std::endl;
+        fprintf(stderr, "Failed to create GLFW window\n");
         glfwTerminate();
         return -1;
     }
@@ -485,7 +498,8 @@ int main()
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
-        std::cout << "Failed to initialize GLAD" << std::endl;
+        fprintf(stderr, "Failed to initialize GLAD\n");
+        glfwTerminate();
         return -1;
     }
 
@@ -503,6 +517,7 @@ int main()
     if (cudaStatus != cudaSuccess) 
     {
         fprintf(stderr, "Boids initialization failed: %s\n", cudaGetErrorString(cudaStatus));
+        cleanUp(&VBO, &VAO, &boidsVelocity, &shaderProgram);
         return -1;
     }
     
@@ -526,6 +541,12 @@ int main()
             if (cudaStatus != cudaSuccess)
             {
                 fprintf(stderr, "iteration launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                cudaStatus = cudaGraphicsUnregisterResource(cudaVBO);
+                if (cudaStatus != cudaSuccess)
+                {
+                    fprintf(stderr, "cudaGraphicsUnregisterResource launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                }
+                cleanUp(&VBO, &VAO, &boidsVelocity, &shaderProgram);
                 return -1;
             }
         }
@@ -557,14 +578,12 @@ int main()
     float loopTime = (float)(end - start) / CLOCKS_PER_SEC;
     printf("Time taken for %i iterations: %f\n", iterations, loopTime);
 
-    cudaGraphicsUnregisterResource(cudaVBO);
-    glDeleteBuffers(1, &VBO);
-    glDeleteVertexArrays(1, &VAO);
-    cudaFree(boidsVelocity.vx);
-    cudaFree(boidsVelocity.vy);
-    glDeleteProgram(shaderProgram);
-    glfwTerminate();
-    
+    cudaStatus = cudaGraphicsUnregisterResource(cudaVBO);
+    if (cudaStatus != cudaSuccess)
+    {
+        fprintf(stderr, "cudaGraphicsUnregisterResource launch failed: %s\n", cudaGetErrorString(cudaStatus));
+    }
+    cleanUp(&VBO, &VAO, &boidsVelocity, &shaderProgram);
 
     cudaStatus = cudaDeviceReset();
     if (cudaStatus != cudaSuccess) 
