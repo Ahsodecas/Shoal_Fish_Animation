@@ -1,42 +1,6 @@
-﻿#include <glad/glad.h>
-#include <GLFW/glfw3.h>
+﻿#pragma once
+#include "definitions.h"
 
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
-#include <cuda_gl_interop.h>
-
-
-#include <stdio.h>
-#include <iostream>
-
-#define ITERATIONS 1000
-#define NUM_BOIDS 10000
-#define BLOCK_SIZE 256
-#define VISUAL_RANGE 50.0f
-#define PROTECTED_RANGE 10.0f
-#define AVOID_FACTOR 0.05f
-#define CURSOR_AVOID_FACTOR 5.0f
-#define MATCHING_FACTOR 0.05f
-#define CENTERING_FACTOR 0.001f
-#define BIAS 0.2f
-#define MIN_SPEED 2.0f
-#define MAX_SPEED 10.0f
-#define DT 0.4f
-#define TURN_FACTOR 0.15f
-#define EDGE_MARGIN 70.0f
-#define SCREEN_HEIGHT 900
-#define SCREEN_WIDTH 1800
-
-bool Moving = true;
-bool CursorOverWindow = false;
-double cursorX;
-double cursorY;
-
-
-struct BoidsVelocity
-{
-    float* vx, * vy;
-};
 
 const char* vertexShaderSource = R"(
 #version 330 core
@@ -56,16 +20,11 @@ void main() {
 )";
 
 
-void toNormalised(float* x, float* y, float* norm_x, float* norm_y)
-{
-    *norm_x = (*x * 2) / SCREEN_WIDTH - 1.0f;
-    *norm_y = 1.0f - (*y * 2) / SCREEN_HEIGHT;
-}
-void fromNormalised(float* x, float* y, float* norm_x, float* norm_y)
-{
-    *x = ((*norm_x + 1.0f) / 2.0f) * SCREEN_WIDTH;
-    *y = (1.0f - ((*norm_y + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
-}
+void calculateTriangleVerticesCPU(float* positions, BoidsVelocity boidsVelocity, int num_boids);
+int oneIterationCPU(float** boids_positions, BoidsVelocity* boidsVelocity);
+void updateBoidsPositionCPU(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt);
+void updateBoidsVelocityCPU(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt, bool cursorOverWindow, double cursorX, double cursorY);
+
 
 __global__ void updateBoidsVelocity(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt, bool cursorOverWindow, double cursorX, double cursorY)
 {
@@ -390,23 +349,11 @@ __global__ void calculateTriangleVertices(float* positions, BoidsVelocity boidsV
     positions[index + 5] = 1.0f - (y2 * 2) / SCREEN_HEIGHT;
 }
 
+
+
 cudaError oneIteration(cudaGraphicsResource** cudaVBO, float ** boids_positions, BoidsVelocity* boidsVelocity, int BLOCKS_NUM)
 {
     cudaError cudaStatus;
-
-    cudaStatus = cudaGraphicsMapResources(1, cudaVBO, 0);
-    if (cudaStatus != cudaSuccess)
-    {
-        fprintf(stderr, "cudaGraphicsMapResources launch failed: %s\n", cudaGetErrorString(cudaStatus));
-        return cudaStatus;
-    }
-
-    cudaStatus = cudaGraphicsResourceGetMappedPointer((void**)boids_positions, NULL, *cudaVBO);
-    if (cudaStatus != cudaSuccess)
-    {
-        fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
-        return cudaStatus;
-    }
 
     updateBoidsVelocity << <BLOCKS_NUM, BLOCK_SIZE >> > (*boids_positions, *boidsVelocity, NUM_BOIDS, DT, CursorOverWindow, cursorX, cursorY);
     cudaStatus = cudaGetLastError();
@@ -450,12 +397,6 @@ cudaError oneIteration(cudaGraphicsResource** cudaVBO, float ** boids_positions,
         return cudaStatus;
     }
 
-    cudaStatus = cudaGraphicsUnmapResources(1, cudaVBO, 0);
-    if (cudaStatus != cudaSuccess)
-    {
-        fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
-        return cudaStatus;
-    }
 
     return cudaSuccess;
 }
@@ -513,8 +454,9 @@ int main()
     BoidsVelocity boidsVelocity;
     float* boids_positions = NULL;
 
+
     cudaStatus = initBoids(&VBO, &VAO, &cudaVBO, &boidsVelocity);
-    if (cudaStatus != cudaSuccess) 
+    if (cudaStatus != cudaSuccess)
     {
         fprintf(stderr, "Boids initialization failed: %s\n", cudaGetErrorString(cudaStatus));
         cleanUp(&VBO, &VAO, &boidsVelocity, &shaderProgram);
@@ -527,6 +469,22 @@ int main()
     clock_t start = clock();
     clock_t end;
 
+
+    float* vx = NULL;
+    float* vy = NULL;
+    float* positions = NULL;
+    BoidsVelocity boidsVelocityCPU;
+    if (!gpuVersion)
+    {
+        vx = (float*)malloc(sizeof(float) * NUM_BOIDS);
+        vy = (float*)malloc(sizeof(float) * NUM_BOIDS);
+        cudaMemcpy(vx, boidsVelocity.vx, sizeof(float) * NUM_BOIDS, cudaMemcpyDeviceToHost);
+        cudaMemcpy(vy, boidsVelocity.vy, sizeof(float) * NUM_BOIDS, cudaMemcpyDeviceToHost);
+        boidsVelocityCPU.vx = vx;
+        boidsVelocityCPU.vy = vy;
+        positions = (float*)malloc(sizeof(float) * NUM_BOIDS * 3 * 2);
+    }
+
     while (!glfwWindowShouldClose(window))
     {
 
@@ -536,18 +494,54 @@ int main()
             {
                 glfwGetCursorPos(window, &cursorX, &cursorY);
             }
-
-            cudaStatus = oneIteration(&cudaVBO, &boids_positions, &boidsVelocity, BLOCKS_NUM);
+            cudaStatus = cudaGraphicsMapResources(1, &cudaVBO, 0);
             if (cudaStatus != cudaSuccess)
             {
-                fprintf(stderr, "iteration launch failed: %s\n", cudaGetErrorString(cudaStatus));
-                cudaStatus = cudaGraphicsUnregisterResource(cudaVBO);
+                fprintf(stderr, "cudaGraphicsMapResources launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                return cudaStatus;
+            }
+
+            cudaStatus = cudaGraphicsResourceGetMappedPointer((void**)&boids_positions, NULL, cudaVBO);
+            if (cudaStatus != cudaSuccess)
+            {
+                fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                return cudaStatus;
+            }
+            if (gpuVersion)
+            {
+                cudaStatus = oneIteration(&cudaVBO, &boids_positions, &boidsVelocity, BLOCKS_NUM);
                 if (cudaStatus != cudaSuccess)
                 {
-                    fprintf(stderr, "cudaGraphicsUnregisterResource launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                    fprintf(stderr, "iteration launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                    cudaStatus = cudaGraphicsUnregisterResource(cudaVBO);
+                    if (cudaStatus != cudaSuccess)
+                    {
+                        fprintf(stderr, "cudaGraphicsUnregisterResource launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                    }
+                    cleanUp(&VBO, &VAO, &boidsVelocity, &shaderProgram);
+                    return -1;
                 }
-                cleanUp(&VBO, &VAO, &boidsVelocity, &shaderProgram);
-                return -1;
+            }
+            else
+            {
+                cudaStatus = cudaMemcpy(positions, boids_positions, sizeof(float) * NUM_BOIDS * 3 * 2,  cudaMemcpyDeviceToHost);
+                if (cudaStatus != cudaSuccess)
+                {
+                    fprintf(stderr, "cudaMemcpy launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                }
+                oneIterationCPU(&positions, &boidsVelocityCPU);
+                cudaStatus = cudaMemcpy(boids_positions, positions, sizeof(float) * NUM_BOIDS * 3 * 2, cudaMemcpyHostToDevice);
+                if (cudaStatus != cudaSuccess)
+                {
+                    fprintf(stderr, "cudaMemcpy launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                }
+            }
+
+            cudaStatus = cudaGraphicsUnmapResources(1, &cudaVBO, 0);
+            if (cudaStatus != cudaSuccess)
+            {
+                fprintf(stderr, "cudaGraphicsResourceGetMappedPointer launch failed: %s\n", cudaGetErrorString(cudaStatus));
+                return cudaStatus;
             }
         }
         glClear(GL_COLOR_BUFFER_BIT);
@@ -585,6 +579,13 @@ int main()
     }
     cleanUp(&VBO, &VAO, &boidsVelocity, &shaderProgram);
 
+    if (!gpuVersion)
+    {
+        free(boidsVelocityCPU.vx);
+        free(boidsVelocityCPU.vy);
+        free(positions);
+    }
+
     cudaStatus = cudaDeviceReset();
     if (cudaStatus != cudaSuccess) 
     {
@@ -593,6 +594,176 @@ int main()
     }
 
     return 0;
+}
+
+
+void updateBoidsVelocityCPU(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt, bool cursorOverWindow, double cursorX, double cursorY)
+{
+    for (int idx = 0; idx < numBoids; idx++)
+    {
+        float close_dx = 0, close_dy = 0;
+        float xvel_avg = 0, yvel_avg = 0, xpos_avg = 0, ypos_avg = 0;
+        int neighbors = 0;
+
+        float my_x = positions[6 * idx];
+        float my_y = positions[6 * idx + 1];
+        float my_vx = boidsVelocity.vx[idx];
+        float my_vy = boidsVelocity.vy[idx];
+        my_x = ((positions[6 * idx] + 1.0f) / 2.0f) * SCREEN_WIDTH;
+        my_y = (1.0f - ((positions[6 * idx + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+
+        for (int i = 0; i < numBoids; i++)
+        {
+            if (i == idx) continue;
+            float x = ((positions[6 * i] + 1.0f) / 2.0f) * SCREEN_WIDTH;
+            float y = (1.0f - ((positions[6 * i + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+            float dx = x - my_x;
+            float dy = y - my_y;
+            float dist = sqrt(dx * dx + dy * dy);
+
+            // Separation
+            if (dist < PROTECTED_RANGE)
+            {
+                close_dx -= dx;
+                close_dy -= dy;
+            }
+            // Alignment and Cohesion
+            if (dist < VISUAL_RANGE)
+            {
+                xvel_avg += boidsVelocity.vx[i];
+                yvel_avg += boidsVelocity.vy[i];
+                xpos_avg += x;
+                ypos_avg += y;
+                neighbors++;
+            }
+        }
+
+        // Calculate alignment and cohesion
+        if (neighbors > 0)
+        {
+            xvel_avg /= neighbors;
+            yvel_avg /= neighbors;
+            xpos_avg /= neighbors;
+            ypos_avg /= neighbors;
+
+            // Alignment
+            my_vx += (xvel_avg - my_vx) * MATCHING_FACTOR;
+            my_vy += (yvel_avg - my_vy) * MATCHING_FACTOR;
+
+            // Cohesion
+            my_vx += (xpos_avg - my_x) * CENTERING_FACTOR;
+            my_vy += (ypos_avg - my_y) * CENTERING_FACTOR;
+        }
+
+        // Separation
+        my_vx += close_dx * AVOID_FACTOR;
+        my_vy += close_dy * AVOID_FACTOR;
+
+        // Avoid cursor
+        if (cursorOverWindow)
+        {
+            float dx_cursor = cursorX - my_x;
+            float dy_cursor = cursorY - my_y;
+            float dist_cursor = sqrtf(dx_cursor * dx_cursor + dy_cursor * dy_cursor);
+            if (dist_cursor < VISUAL_RANGE)
+            {
+                my_vx -= dx_cursor * CURSOR_AVOID_FACTOR;
+                my_vy -= dy_cursor * CURSOR_AVOID_FACTOR;
+            }
+        }
+
+        // Bias 
+        // biased to the right
+        if (idx % 419 == 0)
+        {
+            my_vx = (1 - BIAS) * my_vx + (BIAS * 1);
+        }
+        // biased to the left
+        else if (idx % 409 == 0)
+        {
+            my_vx = (1 - BIAS) * my_vx + (BIAS * (-1));
+        }
+
+        // Edge Avoidance
+        if (my_x < EDGE_MARGIN) my_vx += TURN_FACTOR;
+        if (my_x > SCREEN_WIDTH - EDGE_MARGIN) my_vx -= TURN_FACTOR;
+        if (my_y < EDGE_MARGIN) my_vy += TURN_FACTOR;
+        if (my_y > SCREEN_HEIGHT - EDGE_MARGIN) my_vy -= TURN_FACTOR;
+
+        // Speed Limits
+        float speed = sqrt(my_vx * my_vx + my_vy * my_vy);
+        if (speed < MIN_SPEED)
+        {
+            my_vx = (my_vx / speed) * MIN_SPEED;
+            my_vy = (my_vy / speed) * MIN_SPEED;
+        }
+        if (speed > MAX_SPEED)
+        {
+            my_vx = (my_vx / speed) * MAX_SPEED;
+            my_vy = (my_vy / speed) * MAX_SPEED;
+        }
+
+        my_x += my_vx * dt;
+        my_y += my_vy * dt;
+        boidsVelocity.vx[idx] = my_vx;
+        boidsVelocity.vy[idx] = my_vy;
+    }
+}
+
+void updateBoidsPositionCPU(float* positions, BoidsVelocity boidsVelocity, int numBoids, float dt)
+{
+    for (int idx = 0; idx < numBoids; idx++)
+    {
+        float my_x = ((positions[6 * idx] + 1.0f) / 2.0f) * SCREEN_WIDTH;
+        float my_y = (1.0f - ((positions[6 * idx + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+        my_x += boidsVelocity.vx[idx] * dt;
+        my_y += boidsVelocity.vy[idx] * dt;
+        positions[6 * idx] = (my_x * 2) / SCREEN_WIDTH - 1.0f;
+        positions[6 * idx + 1] = 1.0f - (my_y * 2) / SCREEN_HEIGHT;
+    }
+}
+
+int oneIterationCPU(float** boids_positions, BoidsVelocity* boidsVelocity)
+{
+    updateBoidsVelocityCPU(*boids_positions, *boidsVelocity, NUM_BOIDS, DT, CursorOverWindow, cursorX, cursorY);
+    updateBoidsPositionCPU(*boids_positions, *boidsVelocity, NUM_BOIDS, DT);
+    calculateTriangleVerticesCPU(*boids_positions, *boidsVelocity, NUM_BOIDS);
+    return 0;
+}
+
+
+
+void calculateTriangleVerticesCPU(float* positions, BoidsVelocity boidsVelocity, int num_boids)
+{
+    for (int boid_index = 0; boid_index < num_boids; boid_index++)
+    {
+        int index = boid_index * 6;
+        if (boid_index >= num_boids) return;
+
+        float my_x = ((positions[index] + 1.0f) / 2.0f) * SCREEN_WIDTH;
+        float my_y = (1.0f - ((positions[index + 1] + 1.0f) / 2.0f)) * SCREEN_HEIGHT;
+
+        // Boids are drawn as isosceles triangles of height 5*sqrt(3) heading in direction pointed by point (positions[index], positions[index + 1])
+        float s = 2 * sqrtf(3);
+        float triangle_h = 5 * sqrtf(3);
+
+        float vector_length = sqrt(boidsVelocity.vx[boid_index] * boidsVelocity.vx[boid_index] + boidsVelocity.vy[boid_index] * boidsVelocity.vy[boid_index]);
+        float h_x = my_x - (triangle_h * (boidsVelocity.vx[boid_index] / vector_length));
+        float h_y = my_y - (triangle_h * (boidsVelocity.vy[boid_index] / vector_length));
+
+        float x1 = h_x + ((my_y - h_y) / s);
+        float x2 = h_x + ((h_y - my_y) / s);
+        float y1 = h_y + ((h_x - my_x) / s);
+        float y2 = h_y + ((my_x - h_x) / s);
+
+        positions[index] = positions[index];
+        positions[index + 2] = (x1 * 2) / SCREEN_WIDTH - 1.0f;
+        positions[index + 4] = (x2 * 2) / SCREEN_WIDTH - 1.0f;
+
+        positions[index + 1] = positions[index + 1];
+        positions[index + 3] = 1.0f - (y1 * 2) / SCREEN_HEIGHT;
+        positions[index + 5] = 1.0f - (y2 * 2) / SCREEN_HEIGHT;
+    }
 }
 
 
